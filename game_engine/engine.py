@@ -56,13 +56,19 @@ class Action(metaclass=ValidatedType):
 
 
 OwnerId = int
-SystemId = int
-
+NO_OWNER = 0
 
 PIECE = {
     "color": Color,
     "size": Size
 }
+
+NEW_SYSTEM = {
+    "new_piece": PIECE
+}
+ExistingSystemId = int
+SystemId = (int, NEW_SYSTEM)
+
 SHIP = {
     "owner": OwnerId,
     "piece": PIECE
@@ -100,19 +106,21 @@ EVENT = {
 
 GAMESTATE = {
     "reserve": RESERVE,
-    "systems": TypedDict(SystemId, SYSTEM),
+    "systems": TypedDict(ExistingSystemId, SYSTEM),
     "players": [OwnerId],
     "current_player": OwnerId,
-    "history": [EVENT]
+    "history": [EVENT],
+    "system_count": int,
+    "owner_count": int
 }
 
-CONSTRUCT_ARGS = [SystemId, Color]
+CONSTRUCT_ARGS = [ExistingSystemId, Color]
 # from, ship, to
-MOVE_ARGS = [SystemId, SHIP, SystemId]
-TRADE_ARGS = [SystemId, SHIP, Color]
-ATTACK_ARGS = [SystemId, SHIP]
-SACRIFICE_ARGS = [SystemId, SHIP, [(Action, ACTION_ARGS)]]
-CATASTROPHE_ARGS = [SystemId, Color]
+MOVE_ARGS = [ExistingSystemId, SHIP, SystemId]
+TRADE_ARGS = [ExistingSystemId, SHIP, Color]
+ATTACK_ARGS = [ExistingSystemId, SHIP]
+SACRIFICE_ARGS = [ExistingSystemId, SHIP, [(Action, ACTION_ARGS)]]
+CATASTROPHE_ARGS = [ExistingSystemId, Color]
 
 
 ###################
@@ -193,20 +201,15 @@ def get_ships_in_system_for_player(game: GAMESTATE, player: OwnerId, system: Sys
     return all_ships
 
 
+@schema
+def create_piece_key(piece: PIECE) -> str:
+    return piece["color"][0] + str(piece["size"])
+
 ###################
 # Validation methods
 ###################
 
 #TODO: move some of this logic to types maybe?
-
-ACTION_VALIDATORS = {
-    "construct": validate_construct,
-    "move": validate_move,
-    "trade": validate_trade,
-    "attack": validate_attack,
-    "catastrophe": validate_catastrophe,
-    "sacrifice": validate_sacrifice
-}
 
 
 @schema
@@ -258,8 +261,10 @@ def validate_move(game: GAMESTATE, args: MOVE_ARGS, sacrifice: bool=False) -> [b
 
     if not validate_system_id(game, from_system_id):
         return (False, "System id {} is not valid.".format(from_system_id))
-    if not validate_system_id(game, to_system_id):
+    if isinstance(to_system_id, int) and not validate_system_id(game, to_system_id):
         return (False, "System id {} is not valid.".format(to_system_id))
+    elif isinstance(to_system_id, dict) and not check_piece_in_reserve(game, to_system_id["piece"]):
+        return (False, "Not enough pieces in reserve to create specified system: {}".format(to_system_id))
     if ship[0] != game["current_player"]:
         return (False, "Current player does not own given ship.")
 
@@ -358,7 +363,7 @@ def validate_sacrifice(game: GAMESTATE, args: SACRIFICE_ARGS) -> [bool, str]:
         if action not in valid_action_types:
             return (False, "Given action {} is not valid, expected one of {}.".format(action, valid_action_types))
 
-        action_validation = ACTION_VALIDATORS[action](*a_args)
+        action_validation = ACTION_VALIDATORS[action](a_args)
         if not action_validation[0]:
             return (False, "Action {} with args {} is not valid: {}".format(action, a_args, action_validation[1]))
 
@@ -389,3 +394,164 @@ def validate_catastrophe(game: GAMESTATE, args: CATASTROPHE_ARGS) -> [bool, str]
         return (False, "That color is not overpopulated in system {}".format(system_id))
 
     return (True, "")
+
+
+ACTION_VALIDATORS = {
+    "construct": validate_construct,
+    "move": validate_move,
+    "trade": validate_trade,
+    "attack": validate_attack,
+    "catastrophe": validate_catastrophe,
+    "sacrifice": validate_sacrifice
+}
+
+
+##################
+# Action methods
+# All assume validation has already happened.
+##################
+
+
+@schema
+def construct(game: GAMESTATE, system: SystemId, color: Color) -> GAMESTATE:
+    """Build a ship of smallest size of color in system."""
+    all_size_keys = [color[0] + str(num) for num in range(1, 4)]
+    all_size_amounts = [(key, game["reserve"][key]) for key in all_size_keys if game["reserve"][key] > 0]
+
+    if all_size_amounts:
+        key, amount = all_size_amounts[0]
+        game["reserve"][key] = amount - 1
+        game["systems"][system]["ships"].append({"owner":game["current_player"],
+                                                 "piece": {"color":color,
+                                                           "size": int(key[1])}
+                                                })
+
+    return game
+
+
+@schema
+def move(game: GAMESTATE, from_system: ExistingSystemId, ship: SHIP, to_system: SystemId) -> GAMESTATE:
+    """Moves a ship from from_system to to_system, destroying from_system if it is a neutral star with
+    no other ships.
+    Checks for whether homeworlds are destroyed are only done at the end of the turn, outside actions.
+    """
+    from_ships = game["systems"][from_system]["ships"]
+    from_ships = [s for s in from_ships if s != ship]
+
+    if not from_ships and game["systems"][from_system]["star"]["owner"] == NO_OWNER:
+        piece = game["systems"][from_system]["star"]["piece"]
+        piece_key = piece["color"][0] + str(piece["size"])
+        game["reserve"][piece_key] += 1
+        del game["systems"][from_system]
+
+    if isinstance(to_system, dict):
+        piece = to_system["new_piece"]
+        star = {"owner": NO_OWNER, "pieces": [piece]}
+        system = {"star": star, "ships": [ship]}
+        game["system_count"] += 1
+        new_id = game["system_count"]
+        game["systems"][new_id] = system
+    else:
+        game["systems"][to_system]["ships"].append(ship)
+
+    return game
+
+
+@schema
+def trade(game: GAMESTATE, system: SystemId, ship: SHIP, color: Color) -> GAMESTATE:
+    """Destroys the given ship and creates a new ship of the same size, but specified color."""
+    sys_ships = game["systems"][system]["ships"]
+    sys_ships = [s for s in sys_ships if s != ship]
+
+    new_piece = {"size": ship["piece"]["size"], "color": color}
+    game = _add_piece_to_reserve(game, ship["piece"])
+    game = _remove_piece_to_reserve(game, new_piece)
+
+    new_ship = {"owner": game["current_player"], "piece": new_piece}
+    sys_ships.append(new_ship)
+
+    return game
+
+
+@schema
+def attack(game: GAMESTATE, system: SystemId, ship: SHIP) -> GAMESTATE:
+    """Changes the owner of ship to be the current player."""
+    sys_ship = [s for s in game["systems"][system]["ships"] if s == ship]
+    sys_ship["owner"] = game["current_player"]
+
+    return game
+
+
+@schema
+def sacrifice(game: GAMESTATE, system: SystemId, ship: SHIP, subsequent_actions: [(Action, ACTION_ARGS)]) -> GAMESTATE:
+    sys = game["systems"][system]
+    sys["ships"] = [sh for sh in sys["ships"] if sh != ship]
+    game = _add_piece_to_reserve(game, ship["piece"])
+
+    for action, args in subsequent_actions:
+        method = ACTION_METHODS[action]
+        game = method(game, *args)
+
+    return game
+
+
+@schema
+def catastrophe(game: GAMESTATE, system: SystemId, color: Color) -> GAMESTATE:
+    """If system has one star of the specified color, destroys all ships.
+    Otherwise, destroys all ships of the specified color."""
+    sys = game["systems"][system]
+    remaining_stars = [p for p in sys["star"]["pieces"] if p["color"] != color]
+    if not remaining_stars:
+        for p in sys["star"]["pieces"]:
+            game = _add_piece_to_reserve(game, p)
+        for s in sys["ships"]:
+            game = _add_piece_to_reserve(game, s["piece"])
+        del game["systems"][system]
+    elif len(remaining_stars) != len(sys["star"]["pieces"]):
+        for star in sys["star"]["pieces"]:
+            if star not in remaining_stars:
+                game = _add_piece_to_reserve(game, star)
+        game["systems"][system]["star"]["pieces"] = remaining_stars
+
+        remaining_ships = [sh for sh in get_ships_in_system(game, system) if sh["piece"]["color"] != color]
+        lost_ships = [sh for sh in get_ships_in_system(game, system) if sh["piece"]["color"] == color]
+        for sh in lost_ships:
+            game = _add_piece_to_reserve(game, sh)
+        game["systems"][system]["ships"] = remaining_ships
+    else:
+        remaining_ships = [sh for sh in get_ships_in_system(game, system) if sh["piece"]["color"] != color]
+        lost_ships = [sh for sh in get_ships_in_system(game, system) if sh["piece"]["color"] == color]
+        for sh in lost_ships:
+            game = _add_piece_to_reserve(game, sh)
+        game["systems"][system]["ships"] = remaining_ships
+
+    return game
+
+
+ACTION_METHODS = {
+    "construct": construct,
+    "move": move,
+    "attack": attack,
+    "trade": trade,
+    "catastrophe": catastrophe
+}
+
+
+################
+# Action utils
+# should not be exposed to clients
+################
+
+
+@schema
+def _add_piece_to_reserve(game: GAMESTATE, piece: PIECE) -> GAMESTATE:
+    piece_key = create_piece_key(piece)
+    game["reserve"][piece_key] += 1
+    return game
+
+
+@schema
+def _remove_piece_to_reserve(game: GAMESTATE, piece: PIECE) -> GAMESTATE:
+    piece_key = create_piece_key(piece)
+    game["reserve"][piece_key] -= 1
+    return game
