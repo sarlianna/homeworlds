@@ -46,7 +46,7 @@ def take_turn(game: GAMESTATE, message: str) -> list:
         move = MOVE_LIST[turn_count]
     except:
         move = None
-        other_systems = [(sid, sys) for sid, sys in game["systems"].items() if sys["star"]["owner"] == game["current_player"]]
+        other_systems = [(sid, sys) for sid, sys in game["systems"].items() if sys["star"]["owner"] != game["current_player"]]
         for sid, sys in other_systems:
             if count_color_in_system(sys, "green") > 3:
                 move = ["catastrophe", (sid, "green")]

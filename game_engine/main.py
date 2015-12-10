@@ -26,6 +26,7 @@ from game import (
 
 BOT_PATH = "bots."
 LOG_FILE = "last_game.log"
+DEBUG = False
 
 
 @schema
@@ -132,7 +133,12 @@ def main(first_bot: str, second_bot: str) -> type(None):
             result = interpret_bot_input(gamestate, turn)
 
         gamestate = result[1]
-        gamestate["history"].append(["p{}".format(gamestate["current_player"])] + turn)
+        turn_summary = ["p{}".format(gamestate["current_player"])] + turn
+        gamestate["history"].append(turn_summary)
+
+        if DEBUG:
+            print(turn_summary)
+            print(gamestate)
 
         turn_count += 1
         # don't check for lose conditions on setup turns
@@ -145,7 +151,6 @@ def main(first_bot: str, second_bot: str) -> type(None):
 
         gamestate["current_player"] = next_player(gamestate["current_player"])
 
-    print(str(gamestate["history"]).replace("], ", "],\n"))
     with open(LOG_FILE, "w+") as log:
         log.write(str(gamestate["history"]).replace("], ", "],\n"))
 
