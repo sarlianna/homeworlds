@@ -55,17 +55,22 @@ def interpret_bot_input(game: GAMESTATE, bot_input: list) -> SchemaOr((bool, str
     and args is the appropriate arguments for that method.
     """
 
-    action = bot_input[0]
-    args = bot_input[1]
-    validator = ACTION_VALIDATORS[action]
-    method = ACTION_METHODS[action]
+    for index, _ in enumerate(bot_input):
+        if index % 2 != 0:
+            continue
+        action = bot_input[index]
+        args = bot_input[index + 1]
+        validator = ACTION_VALIDATORS[action]
+        method = ACTION_METHODS[action]
 
-    is_valid = validator(game, args)
-    if is_valid[0]:
+        print(validator)
+        print(args)
+        is_valid = validator(game, args)
+        if not is_valid[0]:
+            return is_valid
         game = method(game, *args)
-        return (True, game)
-    else:
-        return is_valid
+
+    return (True, game)
 
 
 def next_player(player: int) -> int:
@@ -133,7 +138,8 @@ def main(first_bot: str, second_bot: str) -> type(None):
             result = interpret_bot_input(gamestate, turn)
 
         gamestate = result[1]
-        turn_summary = ["p{}".format(gamestate["current_player"])] + turn
+        turn_summary = ["p{}".format(gamestate["current_player"])]
+        turn_summary.append(turn)
         gamestate["history"].append(turn_summary)
 
         if DEBUG:

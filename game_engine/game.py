@@ -14,6 +14,7 @@ from py_types.runtime import (
 )
 from py_types.type_defs import (
     ValidatedType,
+    Any,
     TypedDict,
 )
 
@@ -98,7 +99,7 @@ RESERVE = {
 }
 
 ACTION_ARGS = [SchemaOr(int, str, dict)]
-EVENT = [str, str, (ACTION_ARGS)]
+EVENT = [str, [SchemaOr(str, (ACTION_ARGS))]]
 
 GAMESTATE = {
     "reserve": RESERVE,
@@ -113,7 +114,9 @@ GAMESTATE = {
 
 CONSTRUCT_ARGS = [ExistingSystemId, Color]
 # from, ship, to
-MOVE_ARGS = [ExistingSystemId, SHIP, SystemId]
+# TODO: SystemId is broken; 
+# MOVE_ARGS = [ExistingSystemId, SHIP, SystemId]
+MOVE_ARGS = [ExistingSystemId, SHIP, Any]
 TRADE_ARGS = [ExistingSystemId, SHIP, Color]
 ATTACK_ARGS = [ExistingSystemId, SHIP]
 SACRIFICE_ARGS = [ExistingSystemId, SHIP, [(Action, ACTION_ARGS)]]
@@ -250,30 +253,33 @@ def validate_construct(game: GAMESTATE, args: CONSTRUCT_ARGS, sacrifice: bool=Fa
 def validate_move(game: GAMESTATE, args: MOVE_ARGS, sacrifice: bool=False) -> (bool, str):
     """Returns (True, "") if the move is legal, (False, message) otherwise.
     # from, ship, to
-    MOVE_ARGS = [SystemId, SHIP, SystemId]
+    MOVE_ARGS = [ExistingSystemId, SHIP, SystemId]
     """
     from_system_id = args[0]
     ship = args[1]
-    to_system_id = args[1]
+    to_system_id = args[2]
 
     if not validate_system_id(game, from_system_id):
         return (False, "System id {} is not valid.".format(from_system_id))
     if isinstance(to_system_id, int) and not validate_system_id(game, to_system_id):
         return (False, "System id {} is not valid.".format(to_system_id))
-    elif isinstance(to_system_id, dict) and not check_piece_in_reserve(game, to_system_id["piece"]):
+    elif isinstance(to_system_id, dict) and not check_piece_in_reserve(game, to_system_id["new_piece"]):
         return (False, "Not enough pieces in reserve to create specified system: {}".format(to_system_id))
-    if ship[0] != game["current_player"]:
+    if ship["owner"] != game["current_player"]:
         return (False, "Current player does not own given ship.")
 
     if not check_player_has_ship(game, from_system_id, ship):
         return (False, "Current player does not have a ship of given piece in system {}.".format(from_system_id))
 
     from_system = game["systems"][from_system_id]
-    to_system = game["systems"][to_system_id]
+    if isinstance(to_system_id, int):
+        to_system = game["systems"][to_system_id]
+    else:
+        to_system = {"star": {"owner": 0, "pieces": [to_system_id["new_piece"]]}, "ships": []}
 
     from_star_sizes = {star["size"] for star in from_system["star"]["pieces"]}
     to_star_sizes = {star["size"] for star in to_system["star"]["pieces"]}
-    if len(from_star_sizes.intersect(to_star_sizes)) > 0:
+    if len(from_star_sizes.intersection(to_star_sizes)) > 0:
         return (False, "Target system {} has a star of the same size as origin system {}.".format(to_system_id, from_system_id))
 
     colors_in_system = get_colors_in_system(game, from_system_id)
@@ -295,8 +301,10 @@ def validate_trade(game: GAMESTATE, args: TRADE_ARGS, sacrifice: bool=False) -> 
     if not validate_system_id(game, system_id):
         return (False, "System id {} is not valid.".format(system_id))
 
-    new_piece = [color, ship["piece"]["size"]]
+    new_piece = {"color": color, "size": ship["piece"]["size"]}
     if not check_piece_in_reserve(game, new_piece):
+        print(new_piece)
+        print(game["reserve"][create_piece_key(new_piece)])
         return (False, "No pieces in reserve to trade with.")
 
     colors_in_system = get_colors_in_system(game, system_id)
@@ -455,6 +463,7 @@ def move(game: GAMESTATE, from_system: ExistingSystemId, ship: SHIP, to_system: 
     """
     from_ships = game["systems"][from_system]["ships"]
     from_ships = [s for s in from_ships if s != ship]
+    game["systems"][from_system]["ships"] = from_ships
 
     if not from_ships and game["systems"][from_system]["star"]["owner"] == NO_OWNER:
         piece = game["systems"][from_system]["star"]["piece"]
@@ -480,6 +489,7 @@ def trade(game: GAMESTATE, system: SystemId, ship: SHIP, color: Color) -> GAMEST
     """Destroys the given ship and creates a new ship of the same size, but specified color."""
     sys_ships = game["systems"][system]["ships"]
     sys_ships = [s for s in sys_ships if s != ship]
+    game["systems"][system]["ships"] = sys_ships
 
     new_piece = {"size": ship["piece"]["size"], "color": color}
     game = _add_piece_to_reserve(game, ship["piece"])
