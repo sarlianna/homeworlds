@@ -21,6 +21,7 @@ from py_types.type_defs import (
 # Types / Schemas
 ##################
 
+#TODO: move owner out of star and into system
 
 @typecheck
 def check_color(color: str) -> bool:
@@ -97,15 +98,12 @@ RESERVE = {
 }
 
 ACTION_ARGS = [SchemaOr(int, str, dict)]
-EVENT = {
-    "owner": OwnerId,
-    "action": Action,
-    "args": ACTION_ARGS
-}
+EVENT = [str, str, (ACTION_ARGS)]
 
 GAMESTATE = {
     "reserve": RESERVE,
-    "systems": TypedDict(ExistingSystemId, SYSTEM),
+    #TODO: "systems": TypedDict(ExistingSystemId, SYSTEM),
+    "systems": dict,
     "players": [OwnerId],
     "current_player": OwnerId,
     "history": [EVENT],
@@ -190,7 +188,7 @@ def get_colors_in_system_for_player(game: GAMESTATE, player: OwnerId, system: Sy
 
 
 @schema
-def get_ships_in_system(game: GAMESTATE, system: SystemId) -> [Color]:
+def get_ships_in_system(game: GAMESTATE, system: SystemId) -> [SHIP]:
     all_ships = [ship for ship in game["systems"][system]["ships"]]
     return all_ships
 
@@ -224,7 +222,6 @@ def validate_system_id(game: GAMESTATE, system_id: int) -> bool:
     return system_id in game["systems"].keys()
 
 
-
 @schema
 def validate_construct(game: GAMESTATE, args: CONSTRUCT_ARGS, sacrifice: bool=False) -> (bool, str):
     """Returns (True, "") if the construct is legal, (False, message) otherwise.
@@ -235,7 +232,7 @@ def validate_construct(game: GAMESTATE, args: CONSTRUCT_ARGS, sacrifice: bool=Fa
 
     if not validate_system_id(game, system_id):
         return (False, "System id {} is not valid.".format(system_id))
-    if not check_color_in_reserve(game, color):
+    if not check_color_in_reserve(game, color)[0]:
         return (False, "Not enough pieces of color {} in reserve.".format(color))
 
     colors_in_system = get_colors_in_system(game, system_id)
@@ -410,7 +407,7 @@ def validate_setup(game: GAMESTATE, args: SETUP_ARGS) -> (bool, str):
             return (False, "Not enough pieces of type {} remaining to do setup.".format(key))
 
     for _, system in game["systems"].items():
-        if system["owner"] == game["current_player"]:
+        if system["star"]["owner"] == game["current_player"]:
             return (False, "Current player has already completed setup.")
 
     return (True, "")
@@ -543,7 +540,7 @@ def catastrophe(game: GAMESTATE, system: SystemId, color: Color) -> GAMESTATE:
         remaining_ships = [sh for sh in get_ships_in_system(game, system) if sh["piece"]["color"] != color]
         lost_ships = [sh for sh in get_ships_in_system(game, system) if sh["piece"]["color"] == color]
         for sh in lost_ships:
-            game = _add_piece_to_reserve(game, sh)
+            game = _add_piece_to_reserve(game, sh["piece"])
         game["systems"][system]["ships"] = remaining_ships
 
     return game

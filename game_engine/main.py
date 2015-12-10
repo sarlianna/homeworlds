@@ -16,7 +16,7 @@ from py_types.runtime import (
     typecheck,
 )
 
-from .game import (
+from game import (
     GAMESTATE,
     ACTION_METHODS,
     ACTION_VALIDATORS,
@@ -24,19 +24,19 @@ from .game import (
 )
 
 
-BOT_PATH = "..bots."
-LOG_FILE = "../history"
+BOT_PATH = "bots."
+LOG_FILE = "last_game.log"
 
 
 @schema
-def check_player_lost(game: GAMESTATE) -> SchemaOr(None, [int]):
+def check_player_lost(game: GAMESTATE) -> SchemaOr(type(None), [int]):
     """Returns a list of players who have lost, or None."""
     players_with_homeworlds = []
     for _, system in game["systems"].items():
-        if system["owner"] in game["players"]:
-            owned_ships = [ship for ship in system["ships"] if ship["owner"] == system["owner"]]
+        if system["star"]["owner"] in game["players"]:
+            owned_ships = [ship for ship in system["ships"] if ship["owner"] == system["star"]["owner"]]
             if owned_ships:
-                players_with_homeworlds.append(system["owner"])
+                players_with_homeworlds.append(system["star"]["owner"])
 
     players_without = [pl for pl in game["players"] if pl not in players_with_homeworlds]
     if players_without:
@@ -48,7 +48,7 @@ def check_player_lost(game: GAMESTATE) -> SchemaOr(None, [int]):
 @schema
 def interpret_bot_input(game: GAMESTATE, bot_input: list) -> SchemaOr((bool, str), (bool, GAMESTATE)):
     """Takes bot input and calls the appropriate methods.
-    Bots are expected to return a string in this format:
+    Bots are expected to return a list in this format:
     ["action", (args)]
     where "action" corresponds to a key in ACTION_METHODS
     and args is the appropriate arguments for that method.
@@ -59,9 +59,9 @@ def interpret_bot_input(game: GAMESTATE, bot_input: list) -> SchemaOr((bool, str
     validator = ACTION_VALIDATORS[action]
     method = ACTION_METHODS[action]
 
-    is_valid = validator(game, *args)
+    is_valid = validator(game, args)
     if is_valid[0]:
-        game = method(*args)
+        game = method(game, *args)
         return (True, game)
     else:
         return is_valid
@@ -78,9 +78,16 @@ def next_player(player: int) -> int:
 
 
 @typecheck
-def main(first_bot: str, second_bot: str) -> None:
+def main(first_bot: str, second_bot: str) -> type(None):
     """Instantiates game state, loops on bot input.
     won Ugliest Thing Award in 2015
+
+    Bots are expected to be a module string with a function "take_turn"
+    present.
+    expected signature:
+    take_turn(game: GAMESTATE, message: str) -> GAMESTATE:
+
+    message will contain an error message on the previous input, if any.
     """
     player_one = import_module(BOT_PATH + first_bot)
     player_one_turn = player_one.take_turn
@@ -88,7 +95,7 @@ def main(first_bot: str, second_bot: str) -> None:
     player_two = import_module(BOT_PATH + second_bot)
     player_two_turn = player_two.take_turn
 
-    player_calls = {"1": player_one_turn, "2": player_two_turn}
+    player_calls = {1: player_one_turn, 2: player_two_turn}
 
     gamestate = {
         "reserve": {
@@ -138,9 +145,10 @@ def main(first_bot: str, second_bot: str) -> None:
 
         gamestate["current_player"] = next_player(gamestate["current_player"])
 
+    print(str(gamestate["history"]).replace("], ", "],\n"))
     with open(LOG_FILE, "w+") as log:
-        log.write(gamestate["history"])
+        log.write(str(gamestate["history"]).replace("], ", "],\n"))
 
 
 if __name__ == "__main__":
-    main(sys.argv[0], sys.argv[1])
+    main(sys.argv[1], sys.argv[2])
