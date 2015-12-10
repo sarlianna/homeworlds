@@ -20,7 +20,6 @@ from py_types.type_defs import (
 ##################
 # Types / Schemas
 ##################
-# mostly a copy of Ben's
 
 
 @typecheck
@@ -67,7 +66,7 @@ NEW_SYSTEM = {
     "new_piece": PIECE
 }
 ExistingSystemId = int
-SystemId = (int, NEW_SYSTEM)
+SystemId = SchemaOr(int, NEW_SYSTEM)
 
 SHIP = {
     "owner": OwnerId,
@@ -97,7 +96,7 @@ RESERVE = {
     "r3": int
 }
 
-ACTION_ARGS = [(int, str)]
+ACTION_ARGS = [SchemaOr(int, str, dict)]
 EVENT = {
     "owner": OwnerId,
     "action": Action,
@@ -121,6 +120,7 @@ TRADE_ARGS = [ExistingSystemId, SHIP, Color]
 ATTACK_ARGS = [ExistingSystemId, SHIP]
 SACRIFICE_ARGS = [ExistingSystemId, SHIP, [(Action, ACTION_ARGS)]]
 CATASTROPHE_ARGS = [ExistingSystemId, Color]
+SETUP_ARGS = [[PIECE], PIECE]
 
 
 ###################
@@ -137,7 +137,7 @@ COLOR_ACTIONS = {
 
 
 @schema
-def check_player_has_ship(game: GAMESTATE, system_id: int, player_ship: SHIP) -> [bool, str]:
+def check_player_has_ship(game: GAMESTATE, system_id: int, player_ship: SHIP) -> (bool, str):
     """Returns (True, "") if player_id has ship in system_id, else (False, message)"""
     if not validate_player_id(game, player_ship["owner"]):
         return (False, "Player id {} is not valid.".format(player_ship["owner"]))
@@ -163,7 +163,7 @@ def check_piece_in_reserve(game: GAMESTATE, piece: PIECE) -> bool:
 
 
 @schema
-def check_color_in_reserve(game: GAMESTATE, color: Color) -> [bool, str]:
+def check_color_in_reserve(game: GAMESTATE, color: Color) -> (bool, str):
     """Check if the bank/reserve has pieces of a particular color and any size."""
     color_key = color[0]
     keys = [color_key + str(num) for num in range(1, 4)]
@@ -226,7 +226,7 @@ def validate_system_id(game: GAMESTATE, system_id: int) -> bool:
 
 
 @schema
-def validate_construct(game: GAMESTATE, args: CONSTRUCT_ARGS, sacrifice: bool=False) -> [bool, str]:
+def validate_construct(game: GAMESTATE, args: CONSTRUCT_ARGS, sacrifice: bool=False) -> (bool, str):
     """Returns (True, "") if the construct is legal, (False, message) otherwise.
     CONSTRUCT_ARGS = [SystemId, Color]
     """
@@ -250,7 +250,7 @@ def validate_construct(game: GAMESTATE, args: CONSTRUCT_ARGS, sacrifice: bool=Fa
 
 
 @schema
-def validate_move(game: GAMESTATE, args: MOVE_ARGS, sacrifice: bool=False) -> [bool, str]:
+def validate_move(game: GAMESTATE, args: MOVE_ARGS, sacrifice: bool=False) -> (bool, str):
     """Returns (True, "") if the move is legal, (False, message) otherwise.
     # from, ship, to
     MOVE_ARGS = [SystemId, SHIP, SystemId]
@@ -287,7 +287,7 @@ def validate_move(game: GAMESTATE, args: MOVE_ARGS, sacrifice: bool=False) -> [b
 
 
 @schema
-def validate_trade(game: GAMESTATE, args: TRADE_ARGS, sacrifice: bool=False) -> [bool, str]:
+def validate_trade(game: GAMESTATE, args: TRADE_ARGS, sacrifice: bool=False) -> (bool, str):
     """Returns (True, "") if the trade is legal, (False, message) otherwise.
     TRADE_ARGS = [SystemId, SHIP, Color]
     """
@@ -310,7 +310,7 @@ def validate_trade(game: GAMESTATE, args: TRADE_ARGS, sacrifice: bool=False) -> 
 
 
 @schema
-def validate_attack(game: GAMESTATE, args: ATTACK_ARGS, sacrifice: bool=False) -> [bool, str]:
+def validate_attack(game: GAMESTATE, args: ATTACK_ARGS, sacrifice: bool=False) -> (bool, str):
     """Returns (True, "") if the attack is legal, (False, message) otherwise.
     ATTACK_ARGS = [SystemId, SHIP]
     """
@@ -336,7 +336,7 @@ def validate_attack(game: GAMESTATE, args: ATTACK_ARGS, sacrifice: bool=False) -
 
 
 @schema
-def validate_sacrifice(game: GAMESTATE, args: SACRIFICE_ARGS) -> [bool, str]:
+def validate_sacrifice(game: GAMESTATE, args: SACRIFICE_ARGS) -> (bool, str):
     """Returns (True, "") if the sacrifice is legal, (False, message) otherwise.
     SACRIFICE_ARGS = [SystemId, SHIP, [(str, ACTION_ARGS)]]
     """
@@ -371,7 +371,7 @@ def validate_sacrifice(game: GAMESTATE, args: SACRIFICE_ARGS) -> [bool, str]:
 
 
 @schema
-def validate_catastrophe(game: GAMESTATE, args: CATASTROPHE_ARGS) -> [bool, str]:
+def validate_catastrophe(game: GAMESTATE, args: CATASTROPHE_ARGS) -> (bool, str):
     """Returns (True, "") if the sacrifice is legal, (False, message) otherwise.
     CATASTROPHE_ARGS = [SystemId, Color]
     """
@@ -396,13 +396,34 @@ def validate_catastrophe(game: GAMESTATE, args: CATASTROPHE_ARGS) -> [bool, str]
     return (True, "")
 
 
+@schema
+def validate_setup(game: GAMESTATE, args: SETUP_ARGS) -> (bool, str):
+    """Returns (True, "") if the setup is valid, (False, message) otherwise.
+    SETUP_ARGS = (star_pieces: [PIECE], ship: PIECE)
+    """
+    star_pieces = args[0]
+    ship_piece = args[1]
+    all_pieces = star_pieces + [ship_piece]
+    all_piece_keys = [create_piece_key(piece) for piece in all_pieces]
+    for key in set(all_piece_keys):
+        if game["reserve"][key] < all_piece_keys.count(key):
+            return (False, "Not enough pieces of type {} remaining to do setup.".format(key))
+
+    for _, system in game["systems"].items():
+        if system["owner"] == game["current_player"]:
+            return (False, "Current player has already completed setup.")
+
+    return (True, "")
+
+
 ACTION_VALIDATORS = {
     "construct": validate_construct,
     "move": validate_move,
     "trade": validate_trade,
     "attack": validate_attack,
     "catastrophe": validate_catastrophe,
-    "sacrifice": validate_sacrifice
+    "sacrifice": validate_sacrifice,
+    "setup": validate_setup
 }
 
 
@@ -465,7 +486,7 @@ def trade(game: GAMESTATE, system: SystemId, ship: SHIP, color: Color) -> GAMEST
 
     new_piece = {"size": ship["piece"]["size"], "color": color}
     game = _add_piece_to_reserve(game, ship["piece"])
-    game = _remove_piece_to_reserve(game, new_piece)
+    game = _remove_piece_from_reserve(game, new_piece)
 
     new_ship = {"owner": game["current_player"], "piece": new_piece}
     sys_ships.append(new_ship)
@@ -528,12 +549,29 @@ def catastrophe(game: GAMESTATE, system: SystemId, color: Color) -> GAMESTATE:
     return game
 
 
+@schema
+def setup(game: GAMESTATE, star_pieces: [PIECE], ship_piece: PIECE) -> GAMESTATE:
+    """Takes pieces and alters gamestate to establish a homeworld for current player."""
+    star = {"owner": game["current_player"], "pieces": star_pieces}
+    for piece in star_pieces:
+        game = _remove_piece_from_reserve(game, piece)
+    ship = {"owner": game["current_player"], "piece": ship_piece}
+    game = _remove_piece_from_reserve(game, ship_piece)
+    system = {"star": star, "ships": [ship]}
+    game["system_count"] += 1
+    game["systems"][game["system_count"]] = system
+
+    return game
+
+
 ACTION_METHODS = {
     "construct": construct,
     "move": move,
     "attack": attack,
     "trade": trade,
-    "catastrophe": catastrophe
+    "catastrophe": catastrophe,
+    "sacrifice": sacrifice,
+    "setup": setup
 }
 
 
@@ -551,7 +589,7 @@ def _add_piece_to_reserve(game: GAMESTATE, piece: PIECE) -> GAMESTATE:
 
 
 @schema
-def _remove_piece_to_reserve(game: GAMESTATE, piece: PIECE) -> GAMESTATE:
+def _remove_piece_from_reserve(game: GAMESTATE, piece: PIECE) -> GAMESTATE:
     piece_key = create_piece_key(piece)
     game["reserve"][piece_key] -= 1
     return game
