@@ -114,7 +114,7 @@ GAMESTATE = {
 
 CONSTRUCT_ARGS = [ExistingSystemId, Color]
 # from, ship, to
-# TODO: SystemId is broken; 
+# TODO: SystemId is broken;
 # MOVE_ARGS = [ExistingSystemId, SHIP, SystemId]
 MOVE_ARGS = [ExistingSystemId, SHIP, Any]
 TRADE_ARGS = [ExistingSystemId, SHIP, Color]
